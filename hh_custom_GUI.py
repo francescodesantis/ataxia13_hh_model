@@ -33,7 +33,7 @@ from tkinter import ttk
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from scipy.signal import find_peaks
 
-from params import (
+from params_custom import (
     SIM_DURATION,
     DT,
     REC_VARS,

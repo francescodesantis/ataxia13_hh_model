@@ -1,0 +1,187 @@
+model hh_macica:
+    state:
+        V_m mV = V_m_init
+        V_m_old mV = V_m_init
+        refr_t ms = 0 ms         # Refractory period timer
+        n real = alpha_n_init / (alpha_n_init + beta_n_init)
+        p real = alpha_p_init / (alpha_p_init + beta_p_init)
+        l real = alpha_l_init / (alpha_l_init + beta_l_init)
+        r real = alpha_r_init / (alpha_r_init + beta_r_init)
+        m real = alpha_m_init / (alpha_m_init + beta_m_init)
+        h real = alpha_h_init / (alpha_h_init + beta_h_init)
+
+    equations:
+        # synapses: alpha functions
+        kernel K_syn_exc = (e / tau_syn_exc) * t * exp(-t / tau_syn_exc)
+        # =====================================================
+        # Ionic currents
+        # =====================================================
+        inline I_Na pA = g_Na * m * m * m * h * (E_Na - V_m)
+        inline I_Kv3_1 pA = g_Kv3_1 * n * n * n * (0.8 + 0.2 * p) * (E_Kv3_1 - V_m)
+        inline I_K_LT pA = g_K_LT * l * r * (E_K_LT - V_m)
+        inline I_L pA = g_L * (E_L-V_m)
+
+        # =====================================================
+        # Potassium channel V 3.1 kinetics
+        # =====================================================
+        inline alpha_n real = k_alpha_n * exp(eta_alpha_n * (V_m / mV ))
+        inline beta_n real = k_beta_n * exp(eta_beta_n * (V_m / mV ))
+        n' = (alpha_n * (1.0 - n) - beta_n * n) / ms
+
+        inline alpha_p real = k_alpha_p * exp(eta_alpha_p * (V_m / mV ))
+        inline beta_p real = k_beta_p * exp(eta_beta_p * (V_m / mV ))
+        p' = (alpha_p * (1.0 - p) - beta_p * p) / ms
+
+        # =====================================================
+        # Potassium channel LT kinetics
+        # =====================================================
+        inline alpha_l real = k_alpha_l * exp(eta_alpha_l * (V_m / mV ))
+        inline beta_l real = k_beta_l * exp(eta_beta_l * (V_m / mV ))
+        l' = (alpha_l * (1.0 - l) - beta_l * l) / ms
+
+        inline alpha_r real = k_alpha_r * exp(eta_alpha_r * (V_m / mV ))
+        inline beta_r real = k_beta_r * exp(eta_beta_r * (V_m / mV ))
+        r' = (alpha_r * (1.0 - r) - beta_r * r) / ms
+
+        # =====================================================
+        # Sodium activation (m)
+        # =====================================================
+        inline alpha_m real = k_alpha_m * exp(eta_alpha_m * (V_m / mV ))
+        inline beta_m real = k_beta_m * exp(eta_beta_m * (V_m / mV ))
+        m' = (alpha_m * (1.0 - m) - beta_m * m) / ms
+
+        # =====================================================
+        # Sodium inactivation (h)
+        # =====================================================
+        inline alpha_h real = k_alpha_h * exp(eta_alpha_h * (V_m / mV ))
+        inline beta_h real = k_beta_h * exp(eta_beta_h * (V_m / mV ))
+        h' = (alpha_h * (1.0 - h) - beta_h * h) / ms
+
+        # =====================================================
+        # Membrane equation
+        # =====================================================
+        V_m' = (I_Na + I_Kv3_1 + I_K_LT + I_L + I_e + I_stim) / C_m
+        refr_t' = -1e3 * ms/s    # refractoriness is implemented as an ODE, representing a timer counting back down to zero. XXX: TODO: This should simply read ``refr_t' = -1 / s`` (see https://github.com/nest/nestml/issues/984)
+
+
+    parameters:
+        # =====================================================
+        # Membrane parameters
+        # =====================================================
+        V_m_init mV = -63.0 mV
+        C_m pF = 10 pF
+        g_Na nS = 500.0 nS
+        g_Kv3_1 nS = 150.0 nS
+        g_K_LT nS = 20.0 nS
+        g_L nS = 2.0 nS
+        E_Na mV = 50.0 mV
+        E_Kv3_1 mV = -80.0 mV
+        E_K_LT mV = -80.0 mV
+        E_L mV = -63.0 mV
+        I_e pA = 0.0 pA
+        refr_T ms = 0.6 ms         # Duration of refractory period
+        tau_syn_exc ms = 0.2 ms  # Rise time of the excitatory synaptic alpha function
+
+        # =====================================================
+        # Custom potassium V 3.1 kinetics parameters
+        # =====================================================
+        k_alpha_n real = 0.2719
+        eta_alpha_n real = 0.04
+        k_beta_n real = 0.1974
+        eta_beta_n real = 0
+
+        k_alpha_p real = 0.00713
+        eta_alpha_p real = -0.1942
+        k_beta_p real = 0.0935
+        eta_beta_p real = 0.0058
+
+        # =====================================================
+        # Custom potassium LT kinetics parameters
+        # =====================================================
+        k_alpha_l real = 1.2
+        eta_alpha_l real = 0.03512
+        k_beta_l real = 0.2248
+        eta_beta_l real = -0.0319
+       
+        k_alpha_r real = 0.0438
+        eta_alpha_r real = -0.0053
+        k_beta_r real = 0.0562
+        eta_beta_r real = -0.0047
+
+        # =====================================================
+        # Custom sodium kinetics parameters
+        # =====================================================
+        k_alpha_m real = 76.4
+        eta_alpha_m real = 0.037
+        k_beta_m real = 6.93
+        eta_beta_m real = -0.043
+
+        k_alpha_h real = 0.000533
+        eta_alpha_h real = -0.0909
+        k_beta_h real = 7.87
+        eta_beta_h real = 0.0691
+
+    internals:
+        # =====================================================
+        # Initial conditions for gating variables
+        # =====================================================
+        alpha_n_init real = k_alpha_n * exp(eta_alpha_n * (V_m_init / mV ))
+        beta_n_init real = k_beta_n * exp(eta_beta_n * (V_m_init / mV ))
+        alpha_p_init real = k_alpha_p * exp(eta_alpha_p * (V_m_init / mV ))
+        beta_p_init real = k_beta_p * exp(eta_beta_p * (V_m_init / mV ))
+        alpha_l_init real = k_alpha_l * exp(eta_alpha_l * (V_m_init / mV ))
+        beta_l_init real = k_beta_l * exp(eta_beta_l * (V_m_init / mV ))
+        alpha_r_init real = k_alpha_r * exp(eta_alpha_r * (V_m_init / mV ))
+        beta_r_init real = k_beta_r * exp(eta_beta_r * (V_m_init / mV ))
+        alpha_m_init real = k_alpha_m * exp(eta_alpha_m * (V_m_init / mV ))
+        beta_m_init real = k_beta_m * exp(eta_beta_m * (V_m_init / mV ))
+        alpha_h_init real = k_alpha_h * exp(eta_alpha_h * (V_m_init / mV ))
+        beta_h_init real = k_beta_h * exp(eta_beta_h * (V_m_init / mV ))
+        unit_psc pA = 1 pA    # Unitary postsynaptic current amplitude
+
+    input:
+        exc_spikes <- excitatory spike
+        I_stim pA <- continuous
+
+    output:
+        spike
+
+    update:
+            # Hodgkin-Huxley type model: ODEs are always integrated, regardless of refractory state
+            V_m_old = V_m
+            if refr_t > 0 ms:
+                # neuron is absolute refractory
+                integrate_odes(V_m, n, p, l, r, m, h, refr_t)
+            else:
+                # neuron not refractory
+                integrate_odes(V_m, n, p, l, r, m, h)
+
+            if n < 0.0: 
+                n = 0.0
+            if n > 1.0: 
+                n = 1.0
+            if p < 0.0: 
+                p = 0.0
+            if p > 1.0: 
+                p = 1.0
+            if l < 0.0: 
+                l = 0.0
+            if l > 1.0: 
+                l = 1.0
+            if r < 0.0: 
+                r = 0.0
+            if r > 1.0: 
+                r = 1.0
+            if m < 0.0: 
+                m = 0.0
+            if m > 1.0: 
+                m = 1.0
+            if h < 0.0: 
+                h = 0.0
+            if h > 1.0: 
+                h = 1.0
+
+    onCondition(refr_t <= 0 ms and V_m > 0 mV and V_m_old > V_m):
+        # threshold crossing and maximum
+        refr_t = refr_T    # start of the refractory period
+        emit_spike()
