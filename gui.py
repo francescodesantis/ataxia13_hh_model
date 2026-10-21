@@ -123,6 +123,25 @@ def analyze_ap(t, V):
         ]
     return results
 
+
+# ==========================================================
+# Parse spike times from a comma/space-separated string.
+# Returns a sorted list of valid floats, or [] on empty/bad input.
+# ==========================================================
+def parse_spike_times(raw: str) -> list[float]:
+    """Convert a free-form string of times (ms) to a sorted float list."""
+    tokens = raw.replace(",", " ").split()
+    times = []
+    for tok in tokens:
+        try:
+            t = float(tok)
+            if 0.0 < t < SIM_DURATION:
+                times.append(t)
+        except ValueError:
+            pass
+    return sorted(set(times))
+
+
 # ==========================================================
 # Na kinetics params — kept as model params but NOT shown as sliders
 # ==========================================================
@@ -130,6 +149,9 @@ _NA_PARAMS = {
     "k_alpha_m", "eta_alpha_m", "k_beta_m", "eta_beta_m",
     "k_alpha_h", "eta_alpha_h", "k_beta_h", "eta_beta_h",
 }
+
+# Synapse delay fixed by design (ms)
+_SYN_DELAY = 1.0
 
 # ==========================================================
 # GUI
@@ -208,8 +230,8 @@ class MacicaGUI:
                           command=lambda x, p=param, r=res: self._snap(p, r)
                           ).pack(side="left", fill="x", expand=True)
 
-        # ---- Stimulation -------------------------------------------
-        stim = ttk.LabelFrame(ctrl, text="Stimulation", padding=5)
+        # ---- Stimulation (DC) --------------------------------------
+        stim = ttk.LabelFrame(ctrl, text="DC Stimulation", padding=5)
         stim.pack(fill="x", pady=4)
 
         # DC amplitude
@@ -225,7 +247,7 @@ class MacicaGUI:
         self.dc_var.trace_add("write", lambda *_: self.run())
 
         # DC duration
-        self.dc_dur_var      = tk.DoubleVar(value=40.0)   # ms of active injection
+        self.dc_dur_var      = tk.DoubleVar(value=40.0)
         self._dc_dur_default = 40.0
         ttk.Label(stim, text="DC Duration (ms)").pack(anchor="w", pady=(6, 0))
         dur_row = ttk.Frame(stim)
@@ -236,9 +258,80 @@ class MacicaGUI:
         ttk.Entry(dur_row, textvariable=self.dc_dur_var, width=7).pack(side="right")
         self.dc_dur_var.trace_add("write", lambda *_: self.run())
 
-        # DC onset (fixed at 5 ms, shown as info label)
         ttk.Label(stim, text="DC onset fixed at 5 ms", foreground="gray",
                   font=("", 8, "italic")).pack(anchor="w")
+
+        # ---- Synaptic Input (spike_generator) -----------------------
+        syn = ttk.LabelFrame(ctrl, text="Synaptic Input", padding=5)
+        syn.pack(fill="x", pady=4)
+
+        # Enable / disable toggle
+        self.syn_enable_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(syn, text="Enable spike generator",
+                        variable=self.syn_enable_var,
+                        command=self._on_syn_toggle).pack(anchor="w")
+
+        # Weight
+        self.syn_weight_var      = tk.DoubleVar(value=100.0)
+        self._syn_weight_default = 100.0
+        ttk.Label(syn, text="Weight (pA)").pack(anchor="w", pady=(6, 0))
+        w_row = ttk.Frame(syn)
+        w_row.pack(fill="x")
+        self.syn_weight_scale = ttk.Scale(
+            w_row, from_=-2000, to=2000,
+            variable=self.syn_weight_var, orient="horizontal",
+            command=lambda x: self._snap_syn_weight()
+        )
+        self.syn_weight_scale.pack(side="left", fill="x", expand=True)
+        self.syn_weight_entry = ttk.Entry(w_row, textvariable=self.syn_weight_var, width=7)
+        self.syn_weight_entry.pack(side="right")
+        self.syn_weight_entry.bind("<Return>", lambda e: self.run())
+        self.syn_weight_var.trace_add("write", lambda *_: self.run())
+
+        ttk.Label(syn, text="Delay fixed at 1 ms", foreground="gray",
+                  font=("", 8, "italic")).pack(anchor="w")
+
+        # Spike times
+        ttk.Label(syn, text="Spike times (ms, comma-separated):").pack(anchor="w", pady=(6, 0))
+        self.syn_times_var = tk.StringVar(value="10, 20, 30")
+        times_entry = ttk.Entry(syn, textvariable=self.syn_times_var, width=34)
+        times_entry.pack(fill="x")
+        times_entry.bind("<Return>", lambda e: self.run())
+        times_entry.bind("<FocusOut>", lambda e: self.run())
+
+        # Parsed-times feedback label
+        self.syn_info_lbl = ttk.Label(syn, text="", foreground="gray",
+                                      font=("", 7, "italic"))
+        self.syn_info_lbl.pack(anchor="w")
+
+        # Quick-add periodic burst helper
+        helper = ttk.LabelFrame(syn, text="Quick fill — periodic bursts", padding=4)
+        helper.pack(fill="x", pady=(6, 0))
+
+        h1 = ttk.Frame(helper); h1.pack(fill="x", pady=1)
+        ttk.Label(h1, text="Start (ms)", width=10).pack(side="left")
+        self.burst_start_var = tk.DoubleVar(value=10.0)
+        ttk.Entry(h1, textvariable=self.burst_start_var, width=7).pack(side="right")
+
+        h2 = ttk.Frame(helper); h2.pack(fill="x", pady=1)
+        ttk.Label(h2, text="ISI (ms)", width=10).pack(side="left")
+        self.burst_isi_var = tk.DoubleVar(value=10.0)
+        ttk.Entry(h2, textvariable=self.burst_isi_var, width=7).pack(side="right")
+
+        h3 = ttk.Frame(helper); h3.pack(fill="x", pady=1)
+        ttk.Label(h3, text="# spikes", width=10).pack(side="left")
+        self.burst_n_var = tk.IntVar(value=5)
+        ttk.Entry(h3, textvariable=self.burst_n_var, width=7).pack(side="right")
+
+        ttk.Button(helper, text="Fill spike times",
+                   command=self._fill_burst).pack(fill="x", pady=(4, 0))
+
+        # Start with widgets disabled until checkbox ticked
+        self._syn_widgets = [
+            self.syn_weight_scale, self.syn_weight_entry,
+            times_entry, self.syn_info_lbl,
+        ]
+        # NOTE: _on_syn_toggle() is called after axes are created below
 
         # ---- AP analysis --------------------------------------------
         rf = ttk.LabelFrame(ctrl, text="AP Analysis", padding=5)
@@ -259,12 +352,7 @@ class MacicaGUI:
                                  font=("", 8, "italic"))
         self.tooltip.grid(row=1, column=0, columnspan=2, sticky="w", padx=8, pady=2)
 
-        # ---- Plots (5 panels, V_m and I_currents enlarged) ----------
-        # Row 0: V_m          (tall)
-        # Row 1: I_currents   (tall)
-        # Row 2: Na gating    (m, h)   — compact
-        # Row 3: Kv3.1 gating (n, p)  — compact
-        # Row 4: K-LT gating  (l, r)  — compact
+        # ---- Plots (5 panels) --------------------------------------
         self.fig, self.axes = plt.subplots(
             5, 1, figsize=(7, 13), sharex=True,
             gridspec_kw={"height_ratios": [4, 3, 1.8, 1.8, 1.8]}
@@ -273,9 +361,38 @@ class MacicaGUI:
         self.canvas = FigureCanvasTkAgg(self.fig, master=root)
         self.canvas.get_tk_widget().grid(row=0, column=1, sticky="nsew")
 
+        # Apply initial widget enable/disable state now that axes exist,
+        # then do the first simulation run.
+        self._set_syn_widget_state()
         self.run()
 
     # ---------------------------------------------------------------- #
+    def _set_syn_widget_state(self):
+        """Enable/disable synaptic widgets without triggering run()."""
+        state = "normal" if self.syn_enable_var.get() else "disabled"
+        for w in self._syn_widgets:
+            try:
+                w.configure(state=state)
+            except tk.TclError:
+                pass
+
+    def _on_syn_toggle(self):
+        self._set_syn_widget_state()
+        self.run()
+
+    def _fill_burst(self):
+        try:
+            start = float(self.burst_start_var.get())
+            isi   = float(self.burst_isi_var.get())
+            n     = int(self.burst_n_var.get())
+            if isi <= 0 or n <= 0:
+                raise ValueError
+        except (ValueError, tk.TclError):
+            return
+        times = [start + i * isi for i in range(n)]
+        self.syn_times_var.set(", ".join(f"{t:.1f}" for t in times))
+        self.run()
+
     def _snap(self, param, res):
         v = round(self.vars[param].get() / res) * res
         self.vars[param].set(v)
@@ -289,6 +406,10 @@ class MacicaGUI:
         v = round(self.dc_dur_var.get() / 1.0) * 1.0
         self.dc_dur_var.set(v)
 
+    def _snap_syn_weight(self):
+        v = round(self.syn_weight_var.get() / 10.0) * 10.0
+        self.syn_weight_var.set(v)
+
     def load_preset(self, name):
         for k, v in PRESETS[name].items():
             if k in self.vars:
@@ -301,6 +422,14 @@ class MacicaGUI:
         self.dc_var.set(self._dc_default)
         self.dc_dur_var.set(self._dc_dur_default)
         self.preset_var.set("MNTB Wild-Type")
+        # Reset synaptic section
+        self.syn_enable_var.set(False)
+        self.syn_weight_var.set(self._syn_weight_default)
+        self.syn_times_var.set("10, 20, 30")
+        self.burst_start_var.set(10.0)
+        self.burst_isi_var.set(10.0)
+        self.burst_n_var.set(5)
+        self._on_syn_toggle()
         self.run()
 
     # ---------------------------------------------------------------- #
@@ -321,16 +450,43 @@ class MacicaGUI:
             self._err(f"nest.Create failed:\n{e}")
             return
 
+        # ---- DC generator ------------------------------------------
         dc_start = 5.0
         dc_stop  = dc_start + max(1.0, self.dc_dur_var.get())
-
         dc = nest.Create("dc_generator",
                          params={"amplitude": self.dc_var.get(),
                                  "start": dc_start,
                                  "stop":  dc_stop})
+        nest.Connect(dc, neuron)
+
+        # ---- Spike generator (optional) ----------------------------
+        spike_times = []
+        if self.syn_enable_var.get():
+            spike_times = parse_spike_times(self.syn_times_var.get())
+            if spike_times:
+                sg = nest.Create("spike_generator",
+                                 params={"spike_times": spike_times})
+                nest.Connect(
+                    sg, neuron,
+                    syn_spec={
+                        "synapse_model": "static_synapse",
+                        "weight": self.syn_weight_var.get(),
+                        "delay":  _SYN_DELAY,
+                    }
+                )
+                self.syn_info_lbl.config(
+                    text=f"{len(spike_times)} spike(s): {', '.join(f'{t:.1f}' for t in spike_times[:6])}"
+                          + (" …" if len(spike_times) > 6 else ""),
+                    foreground="navy"
+                )
+            else:
+                self.syn_info_lbl.config(text="⚠ No valid spike times", foreground="red")
+        else:
+            self.syn_info_lbl.config(text="", foreground="gray")
+
+        # ---- Multimeter --------------------------------------------
         mm = nest.Create("multimeter",
                          params={"record_from": REC_VARS, "interval": DT})
-        nest.Connect(dc, neuron)
         nest.Connect(mm, neuron)
 
         try:
@@ -357,17 +513,33 @@ class MacicaGUI:
 
         ax0, ax1, ax2, ax3, ax4 = self.axes
 
-        # ---- V_m (row 0 — tall) ------------------------------------
+        # ---- V_m (row 0) -------------------------------------------
         ax0.clear()
         ax0.plot(t, V, color=CP["Vm"], lw=1.2)
         ax0.set_ylabel("V_m (mV)", fontsize=9)
-        ax0.set_title(
-            f"{self.preset_var.get()}   |   DC = {self.dc_var.get():.0f} pA  ×  {self.dc_dur_var.get():.0f} ms",
-            fontsize=9
-        )
+
+        title = (f"{self.preset_var.get()}   |   DC = {self.dc_var.get():.0f} pA"
+                 f"  ×  {self.dc_dur_var.get():.0f} ms")
+        if self.syn_enable_var.get() and spike_times:
+            title += f"   |   syn: {len(spike_times)} spk  w={self.syn_weight_var.get():.0f} pA"
+        ax0.set_title(title, fontsize=9)
         ax0.axhline(0, color="gray", lw=0.4, ls="--")
 
-        # ---- Ionic currents (row 1 — tall) -------------------------
+        # Mark synaptic input times on V_m panel
+        if self.syn_enable_var.get() and spike_times:
+            v_min, v_max = ax0.get_ylim()
+            for st in spike_times:
+                ax0.axvline(st + _SYN_DELAY, color="orchid", lw=0.8,
+                            ls=":", alpha=0.7)
+            # Legend entry (one proxy)
+            from matplotlib.lines import Line2D
+            ax0.legend(
+                handles=[Line2D([0], [0], color="orchid", lw=1.0, ls=":",
+                                label=f"syn arrival (+{_SYN_DELAY:.0f} ms delay)")],
+                fontsize=7, loc="upper right"
+            )
+
+        # ---- Ionic currents (row 1) --------------------------------
         ax1.clear()
         ax1.plot(t, I_Na,    label="I_Na    (pA)", color=CP["Na"],    lw=1.0)
         ax1.plot(t, I_Kv3_1, label="I_Kv3.1 (pA)", color=CP["Kv3_1"], lw=1.0)
@@ -377,7 +549,7 @@ class MacicaGUI:
         ax1.set_ylabel("Current (pA)", fontsize=9)
         ax1.legend(fontsize=7, loc="upper right")
 
-        # ---- Na gating (row 2 — compact) ---------------------------
+        # ---- Na gating (row 2) -------------------------------------
         ax2.clear()
         ax2.plot(t, m, label="m  (Na act)",   color=CP["m"], lw=0.9)
         ax2.plot(t, h, label="h  (Na inact)", color=CP["h"], lw=0.9)
@@ -386,7 +558,7 @@ class MacicaGUI:
         ax2.legend(fontsize=7, loc="upper right")
         ax2.tick_params(labelsize=7)
 
-        # ---- Kv3.1 gating (row 3 — compact) -----------------------
+        # ---- Kv3.1 gating (row 3) ----------------------------------
         ax3.clear()
         ax3.plot(t, n, label="n  (Kv3.1)",     color=CP["n"], lw=0.9)
         ax3.plot(t, p, label="p  (slow mod.)", color=CP["p"], lw=0.9)
@@ -395,7 +567,7 @@ class MacicaGUI:
         ax3.legend(fontsize=7, loc="upper right")
         ax3.tick_params(labelsize=7)
 
-        # ---- K-LT gating (row 4 — compact) ------------------------
+        # ---- K-LT gating (row 4) -----------------------------------
         ax4.clear()
         ax4.plot(t, l, label="l  (K-LT act)",   color=CP["l"], lw=0.9)
         ax4.plot(t, r, label="r  (K-LT inact)", color=CP["r"], lw=0.9)
