@@ -1,0 +1,17 @@
+name: ataxia_env
+channels:
+  - conda-forge
+dependencies:
+  - python=3.11
+  - nest-simulator=3.9
+  - cxx-compiler          # C++ compiler used by NESTML to build the models
+  - cmake
+  - make
+  - libboost-headers      # needed to compile against NEST 3.9
+  - numpy
+  - matplotlib
+  - jupyterlab
+  - ipykernel
+  - pip
+  - pip:
+      - nestml==8.2.0     # NESTML 9 changed the syntax; the .nestml files here need 8.x
